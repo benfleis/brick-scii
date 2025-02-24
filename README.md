@@ -9,7 +9,7 @@
 - We have perfect bricks and entirely knowable desired outcome. Thus consider 2 stages: design and build as two separate phases. (This is later hinted in instructions.)
 - Design for non-bonus is fixed (or at least trivially generated), begin with static pre-planned map
 - Build will be frontier based, with a sort/filter priority based on height, and a look-ahead dependency indicating whether laying this brick enables other bricks to be laid without a robot movement. (Brick requiring robot movement remain in the frontier but sorted to end.)
-- For given problem it appears ideal is a single S shape is ideal, lower-left, lower-right, middle-right, middle-left, upper-left, upper-right; 3 strides, 2 lifts
+- For given problem it appears ideal is a single (backwards) C shape, lower-left, lower-middle, lower-right, upper-right, upper-middle, upper-left; 4 strides, 1 lifts
 
 ### Representations
 - Wall: finished wall dimensions
