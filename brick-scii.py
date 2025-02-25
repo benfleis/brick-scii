@@ -38,10 +38,10 @@ class Coordinate(typing.NamedTuple):
     y: int  # analogue: Position.row
 
     def stride(self, dx: int) -> typing.Self:
-        return self.__class__(self.x + dx, self.y)
+        return self.__class__(self.x + dx, self.y) if dx else self
 
     def raise_(self, dy: int) -> typing.Self:
-        return self.__class__(self.x, self.y + dy)
+        return self.__class__(self.x, self.y + dy) if dy else self
 
 
 ORIGIN = Coordinate(0, 0)
@@ -55,10 +55,18 @@ class BoundingBox:
     upper_right: Coordinate
 
     def stride(self, dx: int) -> typing.Self:
-        return self.__class__(self.lower_left.stride(dx), self.upper_right.stride(dx))
+        return (
+            self.__class__(self.lower_left.stride(dx), self.upper_right.stride(dx))
+            if dx
+            else self
+        )
 
     def raise_(self, dy: int) -> typing.Self:
-        return self.__class__(self.lower_left.raise_(dy), self.upper_right.raise_(dy))
+        return (
+            self.__class__(self.lower_left.raise_(dy), self.upper_right.raise_(dy))
+            if dy
+            else self
+        )
 
     def contains(self, other: typing.Self) -> bool:
         return (
@@ -231,6 +239,8 @@ def format_bit(bit: Bit, status: str, reachable: bool) -> str:
         return f"{Fore.green}{incomplete}"
     elif status == "f":
         return f"{Fore.yellow}{incomplete}"
+    elif reachable:
+        return f"{Fore.blue}{incomplete}"
     else:
         return f"{Style.reset}{incomplete}"
 
@@ -295,48 +305,44 @@ class State:
         return self.robot.contains(bbox)
 
     def step(self) -> typing.Self | None:
-        # NOTE: presume costs of brick << stride << raise_
-
         # lay brick in reachable frontier
         if to_complete := self.reachable_frontier_head():
             return self.install_bit(to_complete)
 
-        # otherwise move robot -- greedy/naive way is to try all possible strides, keep all that produce
-        # reachable frontier, and choose shortest stride among max
-        # stride first
-        best = ([], self)
-        stride_dx = HEAD_JOINT.dx
-        for x in range(
-            0, (self.layout.wall.dx() - self.robot.dx()) + stride_dx, stride_dx
+        # NOTE: presume costs of brick << stride << raise_
+        # frontier plucking is relatively straightforward, greedy lowest is probably enough
+        # when that's empty, choosing stride trickier
+        # - naively choose most current frontier works but not well
+        # - better to look at sum of unlocking weight -- eg take the upward pyramid of all supported bricks
+        #   - could be done here if I am ready to compute the support tree in both dirs
+        # - raise should actually be straightforward if we presume to perform all horizontal work
+        #   first; in that case simply ratchet high enough to maximize next round
+        #
+
+        # stride first - find lowest unreachable frontiers, stride to them (ideally centered)
+        if pair := next(
+            filter(lambda pair: "f" in pair[1], enumerate(self.status)), None
         ):
-            raise_ = x - self.robot.lower_left.x
-            raised = copy.replace(self, robot=self.robot.stride(raise_))
-            reachables = list(raised.reachable_frontier())
-            if len(reachables) > len(best[0]):  # or == and abs(stride) smaller
-                best = (reachables, raised)
-        if reachables := best[0]:
-            wip = best[1]
-            for frontier_pb in reachables:
-                wip = wip.set_frontier(frontier_pb.pos)
-            return wip
+            (row_idx, row_fs) = pair
+            first = row_fs.find("f")
+            last = row_fs.rfind("f")
+            target_x = self.layout.rows[row_idx].bits[first].bbox.lower_left.x
+            target_dx = self.layout.rows[row_idx].dx(first, last)
+            if margin := self.robot.dx() - target_dx:
+                target_x -= (margin // 10) * 10
+
+            stride = target_x - self.robot.lower_left.x
+            if stride:
+                return copy.replace(self, robot=self.robot.stride(stride))
 
         # raise robot
-        best = ([], self)
-        raise_dy = HEAD_JOINT.dy
-        for y in range(
-            0, (self.layout.wall.dy() - self.robot.dy()) + raise_dy, raise_dy
-        ):
-            raise_ = y - self.robot.lower_left.y
-            raised = copy.replace(self, robot=self.robot.raise_(raise_))
+        robot_course_cnt = self.robot.dy() // COURSE.dy
+        rise = robot_course_cnt * COURSE.dy
+        risen_robot = self.robot.raise_(rise)
+        if risen_robot.lower_left.y < self.layout.wall.dy():
+            return copy.replace(self, robot=risen_robot)
 
-            reachables = list(raised.reachable_frontier())
-            if len(reachables) > len(best[0]):  # or == and abs(raise_) smaller
-                best = (reachables, raised)
-        if reachables := best[0]:
-            wip = best[1]
-            for frontier_pb in reachables:
-                wip = wip.set_frontier(frontier_pb.pos)
-            return wip
+        # TODO: assert all complete
 
     def reachable_frontier_head(self) -> PositionedBit | None:
         return next(self.reachable_frontier(), None)
@@ -382,7 +388,7 @@ class State:
         )
         return support_bbox.contains(pb.bbox)
 
-    def steps(self) -> typing.Iterable[typing.Self]:
+    def steps(self) -> typing.Generator[typing.Self]:
         cur = self
         while cur:
             yield cur
@@ -501,7 +507,7 @@ def _test_steps():
     s0 = State.make(layout, ROBOT_813)
     for step, state in enumerate(s0.steps()):
         print("step =", step)
-        print("robot = ", state.robot)
+        print("robot =", state.robot)
         state.print()
         print()
 
