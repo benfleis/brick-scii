@@ -5,13 +5,14 @@
 (See also: `notes/*` for my on-the-fly thoughts and notes.)
 
 ### Outcomes & Rough Approach
+
 - Since no specific data given, assume robot moves (side-side or up-down) orders of magnitude slower, thus optimize for outcome metric: bricks / robot movement
 - We have perfect bricks and entirely knowable desired outcome. Thus consider 2 stages: design and build as two separate phases. (This is later hinted in instructions.)
 - Design for non-bonus is fixed (or at least trivially generated), begin with static pre-planned map
 - Build will be frontier based, with a sort/filter priority based on height, and a look-ahead dependency indicating whether laying this brick enables other bricks to be laid without a robot movement. (Brick requiring robot movement remain in the frontier but sorted to end.)
-- For given problem it appears ideal is a single (backwards) C shape, lower-left, lower-middle, lower-right, upper-right, upper-middle, upper-left; 4 strides, 1 lifts
 
 ### Representations
+
 - Wall: finished wall dimensions
 - Layout: set of unique brick locations, marked with number and corners; could in second pass determine dependencies (eg, that a brick can only be accessed if all bricks underneath it are already laid).
 - Robot:

@@ -24,20 +24,18 @@ class Bit:
     # dz: int
 
 
-@dataclass(frozen=True, kw_only=True)
-class Position:
+class Position(typing.NamedTuple):
     """Position is brick/row index within a layout."""
 
-    brick: int
-    row: int
+    bit: int  # analogue: Coordinate.x
+    row: int  # analogue: Coordinate.y
 
 
-@dataclass(frozen=True)
-class Coordinate:
+class Coordinate(typing.NamedTuple):
     """Coordinate is classic cartesian on 2d space."""
 
-    x: int
-    y: int
+    x: int  # analogue: Position.bit
+    y: int  # analogue: Position.row
 
     def stride(self, dx: int) -> typing.Self:
         return self.__class__(self.x + dx, self.y)
@@ -120,7 +118,7 @@ def jointed_row(row: str) -> str:
 
 def row_width(row: str) -> int:
     "calculate row width, including head joints"
-    return sum((bits_by_key[key.upper()].dx for key in jointed_row(row)))
+    return sum((bits_by_key[key.upper()].dx for key in row))
 
 
 def row_to_brick_bboxes(y: int, row: str) -> typing.Iterable[BoundingBox]:
@@ -199,11 +197,82 @@ def brick_bbox(pos: Position, row: str) -> BoundingBox:
     y1 = y0 + COURSE.dy
 
     # row = layout[pos.row]
-    assert pos.brick < len(row), "Invalid brick box column"
-    x0 = row_next_x(row[: pos.brick])
-    x1 = x0 + bits_by_key[row[pos.brick].upper()].dx
+    assert pos.bit < len(row), "Invalid brick box column"
+    x0 = row_next_x(row[: pos.bit])
+    x1 = x0 + bits_by_key[row[pos.bit].upper()].dx
 
     return BoundingBox(Coordinate(x=x0, y=y0), Coordinate(x=x1, y=y1))
+
+
+@dataclass(frozen=True)
+class PositionedBit:
+    bit: Bit
+    pos: Position
+    bbox: BoundingBox
+
+
+@dataclass(frozen=True)
+class Row:
+    bits: list[PositionedBit]
+
+    @classmethod
+    def make(cls, row_idx: int, row_str: str) -> typing.Self:
+        y0 = row_idx * WHOLE_BRICK.dy
+        y1 = y0 + WHOLE_BRICK.dy
+        row: list[PositionedBit] = []
+        x0 = 0
+        for bit_idx, bit_key in enumerate(row_str):
+            bit = bits_by_key[bit_key]
+            pb = PositionedBit(
+                bit=bit,
+                pos=Position(bit=bit_idx, row=row_idx),
+                bbox=BoundingBox(
+                    lower_left=Coordinate(x0, y0),
+                    upper_right=Coordinate(x0 + bit.dx, y1),
+                ),
+            )
+            row.append(pb)
+            x0 += bit.dx
+        return cls(row)
+
+    def format(self, to_lower: bool = False) -> str:
+        out = "".join(map(lambda pb: pb.bit.key, self.bits))
+        return out if not to_lower else out.lower()
+
+    def overlaps(
+        self,
+        bbox: BoundingBox,
+        *,
+        include_partial: bool = True,
+        exclude_joints: bool = False,
+    ) -> list[PositionedBit]:
+        """Return sequence of bricks contained by BoundingBox `bbox`. `include_partial` means include
+        bricks that are partially in, and partially out, of bbox."""
+        # XXX: needs unit tests
+        start = stop = None
+        step = 1
+
+        for pb in self.bits:
+            # check starting point
+            if start is None:
+                if bbox.lower_left.x <= pb.bbox.upper_right.x:
+                    start = (pb.pos.bit // 2) + 1
+                    if include_partial or bbox.lower_left.x <= pb.bbox.lower_left.x:
+                        start -= 1
+
+            # check ending point
+            else:
+                if pb.bbox.lower_left.x <= bbox.upper_right.x:
+                    stop = pb.pos.bit // 2
+                    if include_partial or pb.bbox.upper_right.x <= bbox.upper_right.x:
+                        stop += 1
+                    break
+
+        if exclude_joints and start and not self.bits[start].bit.key.isalpha():
+            start += 1
+            step = 2
+
+        return self.bits[slice(start, stop, step)]
 
 
 @dataclass(frozen=True)
@@ -217,154 +286,187 @@ class Layout:
     """
 
     wall: BoundingBox
-    rows: list[str]
+    rows: list[Row]
 
     @classmethod
-    def normalize(cls, wall: BoundingBox, rows: typing.Iterable[str]) -> typing.Self:
+    def make(cls, wall: BoundingBox, rows: typing.Iterable[str]) -> typing.Self:
         """takes a sequence of rows, each row rep'd as string of half and whole bricks, e.g.
         "hwwwwh", which would represent a row beginning with a single half brick, then four
         consecutive whole bricks, and ending with a half."""
-        normalized = []
-        layout_width: int = -1
-
-        for i, row in enumerate(rows):
-            for key in row:
-                assert key in row_bit_keys, "Got invalid key"
-            row_normalized = row.replace(HEAD_JOINT.key, "")
-            normalized.append(row_normalized)
-            width = row_width(row_normalized)
-            if i == 0:
-                layout_width = width
-            else:
-                assert layout_width == width, (
-                    f"Got layout != row width: {layout_width} != {row_width}"
-                )
-
+        normalized: list[Row] = [
+            Row.make(row_idx, row_str) for row_idx, row_str in enumerate(rows)
+        ]
         return cls(wall, normalized)
 
     @classmethod
-    def from_stretcher_bond(cls, wall: BoundingBox) -> typing.Self:
+    def make_stretcher_bond(cls, wall: BoundingBox) -> typing.Self:
         # XXX: hard code the layout
         assert wall == WALL, "invalid wall, only fixed WALL"
 
-        # NOTE: - order is bottom-to-top, reverse of how we'll visualize it!
         rows = [
-            "W" * 10 + "H",
-            "H" + "W" * 10,
+            "|".join("W" * 10 + "H"),
+            "|".join("H" + "W" * 10),
         ] * 16
 
         assert rows_height(len(rows)) == wall.dy()
         for row in rows:
             assert row_width(row) == wall.dx()
 
-        return cls.normalize(wall, rows)
-
-    def to_init_rows(self) -> list[str]:
-        return [row.lower() for row in self.rows]
+        return cls.make(wall, rows)
 
 
-PRINT_BITS_BY_KEY = {
-    WHOLE_BRICK.key: "▓" * (WHOLE_BRICK.dx // HEAD_JOINT.dx),
-    WHOLE_BRICK.key.lower(): "░" * (WHOLE_BRICK.dx // HEAD_JOINT.dx),
-    HALF_BRICK.key: "▓" * (HALF_BRICK.dx // HEAD_JOINT.dx),
-    HALF_BRICK.key.lower(): "░" * (HALF_BRICK.dx // HEAD_JOINT.dx),
-    HEAD_JOINT.key: " ",
+_HALF_CHARS = 4
+_WHOLE_CHARS = _HALF_CHARS * 2
+
+BIT_FORMATS_BY_KEY: dict[str, tuple[str, str]] = {
+    WHOLE_BRICK.key: ("▓" * _WHOLE_CHARS, "░" * _WHOLE_CHARS),
+    HALF_BRICK.key: ("▓" * _HALF_CHARS, "░" * _HALF_CHARS),
+    HEAD_JOINT.key: ("|", " "),
 }
 
 
-def format_bit(key: str, in_frontier: bool, in_reach: bool) -> str:
-    output = PRINT_BITS_BY_KEY[key]
-    if key.isupper():
-        return f"{Fore.red}{output}{Style.reset}"
-    elif in_reach and in_frontier:
-        return f"{Fore.green}{output}{Style.reset}"
-    elif in_frontier:  # and not in_reach
-        return f"{Fore.yellow}{output}{Style.reset}"
-    else:  # not in_frontier
-        return output
+def format_bit(bit: Bit, status: str, reachable: bool) -> str:
+    complete, incomplete = BIT_FORMATS_BY_KEY[bit.key]
+    if status == "C":
+        return f"{Fore.red}{complete}"
+    elif status == "f" and reachable:
+        return f"{Fore.green}{incomplete}"
+    elif status == "f":
+        return f"{Fore.yellow}{incomplete}"
+    else:
+        return f"{Style.reset}{incomplete}"
 
 
 @dataclass(frozen=True)
 class State:
-    rows: list[str]
+    layout: Layout
     robot: BoundingBox
-    frontier: list[Position]
+    status: list[str]  # NOTE: map= " ": non-frontier, "f": frontier, "C": complete
 
     @classmethod
-    def initial(cls, layout: Layout, robot: BoundingBox) -> typing.Self:
-        return cls(
-            rows=layout.to_init_rows(),
-            robot=robot,
-            # first frontier is bottom row
-            frontier=[Position(brick=n, row=0) for n in range(len(layout.rows))],
-        )
+    def make(cls, layout: Layout, robot: BoundingBox) -> typing.Self:
+        status: list[str] = [" " * len(row.bits) for row in layout.rows]
+        status[0] = "f" * len(layout.rows[0].bits)
+        return cls(layout=layout, robot=robot, status=status)
 
     def print(self):
-        for row_idx in range(len(self.rows) - 1, -1, -1):
-            row = self.rows[row_idx]
-            brick_strings = []
-            for brick_idx, brick_key in enumerate(row):
-                pos = Position(row=row_idx, brick=brick_idx)
-                in_frontier = pos in self.frontier
-                in_reach = self.robot.contains(brick_bbox(pos, row))
-                brick_strings.append(
+        for row_idx in range(len(self.layout.rows) - 1, -1, -1):
+            bit_row = self.layout.rows[row_idx]
+            bit_strings = []
+            for bp in bit_row.bits:
+                bit_strings.append(
                     format_bit(
-                        key=brick_key, in_frontier=in_frontier, in_reach=in_reach
+                        bp.bit,
+                        status=self.status[bp.pos.row][bp.pos.bit],
+                        reachable=self.is_reachable(bp.bbox),
                     )
                 )
-            print(*brick_strings)
+            print(*bit_strings, sep="", end=Style.reset + "\n")
 
-    @property
-    def reachable_frontier(self):
-        return [
-            pos
-            for pos in self.frontier
-            if self.robot.contains(brick_bbox(pos, self.rows[pos.row]))
-        ]
+    def set_frontier(self, pos: Position) -> typing.Self:
+        bit_idx, row_idx = pos
+        row = self.status[row_idx]
+        bit_status = row[bit_idx]
+        assert not bit_status.isupper(), "set_frontier called on completed bit"
+        if bit_status == " ":
+            updated_row = row[:bit_idx] + "f" + row[bit_idx + 1 :]
+            updated_rows = copy.copy(self.status)
+            updated_rows[row_idx] = updated_row
+            return copy.replace(self, status=updated_rows)
+        return self  # unmodified
 
-    def set_brick(self, pos: Position) -> typing.Self:
-        # first update brick
-        rows = self.rows
-        row = rows[pos.row]
-        updated_row = row[: pos.brick] + row[pos.brick].upper() + row[pos.brick + 1 :]
-        updated_rows = rows[: pos.row] + [updated_row] + rows[pos.row + 1 :]
+    def is_frontier(self, pos: Position) -> bool:
+        return self.status[pos.row][pos.bit].islower()
 
-        # then remove brick from frontier
-        updated_frontier = copy.copy(self.frontier)
-        updated_frontier.remove(pos)
+    def set_complete(self, pos: Position) -> typing.Self:
+        bit_idx, row_idx = pos
+        row = self.status[row_idx]
+        bit_status = row[bit_idx]
+        assert bit_status != " ", "set_complete called on non frontier bit"
+        if bit_status.islower():
+            updated_row = row[:bit_idx] + "C" + row[bit_idx + 1 :]
+            updated_rows = copy.copy(self.status)
+            updated_rows[row_idx] = updated_row
+            return copy.replace(self, status=updated_rows)
+        return self  # unmodified
 
-        # then add newly unlocked positions
-        if pos.row != len(self.rows) - 1:
-            up_row_y = pos.row * COURSE.dy
-            # pos_bbox = brick_bbox(pos, row)
-            # first find all touched upward bricks
-            up_row = self.rows[pos.row + 1]
-            # start, stop = row_slice(up_row, pos_bbox, True)
-            up_bricks_bboxes = row_to_brick_bboxes(up_row_y, up_row)
-            # NOTE: laid bboxes calculated with up_row_y to allow contains checks
-            supporting_bboxes = list(row_to_laid_bboxes(up_row_y, updated_row))
+    def is_complete(self, pos: Position) -> bool:
+        return self.status[pos.row][pos.bit].isupper()
 
-            def is_unlocked(bbox: BoundingBox) -> bool:
-                return any((supp.contains(bbox) for supp in supporting_bboxes))
-
-            new_frontier = [
-                Position(brick=idx, row=pos.row + 1)
-                for idx, bbox in enumerate(up_bricks_bboxes)
-                if Position(brick=idx, row=pos.row + 1) not in self.frontier
-                and is_unlocked(bbox)
-            ]
-            if new_frontier:
-                updated_frontier.extend(new_frontier)
-                # TODO: sort
-
-        return copy.replace(self, rows=updated_rows, frontier=updated_frontier)
+    def is_reachable(self, bbox: BoundingBox) -> bool:
+        return self.robot.contains(bbox)
 
     def step(self) -> typing.Self | None:
-        # lay bricks in reachable frontier
-        cur = self
-        for pos in cur.reachable_frontier:
-            if cur.robot.contains(brick_bbox(pos, cur.rows[pos.brick])):
-                return cur.set_brick(pos)
+        # NOTE: presume costs of brick << stride << raise_
+
+        # lay brick in reachable frontier
+        if to_complete := self.reachable_frontier_head():
+            return self.do_bit(to_complete)
+
+        # otherwise move robot -- greedy/naive way is to try all possible strides, keep all that produce
+        # reachable frontier, and choose shortest stride among max
+        best = ([], self)
+        stride_dx = HEAD_JOINT.dx
+        for x in range(
+            0, (self.layout.wall.dx() - self.robot.dx()) + stride_dx, stride_dx
+        ):
+            stride = x - self.robot.lower_left.x
+            strode = copy.replace(self, robot=self.robot.stride(stride))
+            reachables = list(strode.reachable_frontier())
+            if len(reachables) > len(best[0]):  # or == and abs(stride) smaller
+                best = (reachables, strode)
+        if reachables := best[0]:
+            wip = best[1]
+            for frontier_pb in reachables:
+                wip = wip.set_frontier(frontier_pb.pos)
+            return wip
+
+    def reachable_frontier_head(self) -> PositionedBit | None:
+        return next(self.reachable_frontier(), None)
+
+    def reachable_frontier(self) -> typing.Generator[PositionedBit]:
+        # bottom to top, left to right
+        for pb_row, status_row in zip(self.layout.rows, self.status):
+            for pb, status in zip(pb_row.bits, status_row):
+                if status == "f" and self.is_reachable(pb.bbox):
+                    yield pb
+
+    def do_bit(self, pb: PositionedBit) -> typing.Self:
+        rv = self.set_complete(pb.pos)
+
+        if pb.pos.row != len(rv.layout.rows) - 1:
+            up_row = rv.layout.rows[pb.pos.row + 1]
+            new_frontier = [
+                pb
+                for pb in up_row.overlaps(
+                    pb.bbox, include_partial=True, exclude_joints=False
+                )
+                if rv.is_supported(pb)
+            ]
+            for frontier_pb in new_frontier:
+                rv = self.set_frontier(frontier_pb.pos)
+
+        return rv
+
+    def is_supported(self, pb: PositionedBit) -> bool:
+        if pb.pos.row == 0:
+            return True
+        support_row = self.layout.rows[pb.pos.row - 1]
+        support_overlaps = [
+            pb
+            for pb in support_row.overlaps(
+                pb.bbox, include_partial=True, exclude_joints=False
+            )
+            if self.is_complete(pb.pos)
+        ]
+        if not support_overlaps:
+            return False
+
+        support_bbox = BoundingBox(
+            lower_left=support_overlaps[0].bbox.lower_left,
+            upper_right=support_overlaps[-1].bbox.upper_right,
+        )
+        return support_bbox.contains(pb.bbox)
 
     def steps(self) -> typing.Iterable[typing.Self]:
         cur = self
@@ -379,24 +481,27 @@ def test():
 
 
 def test_rows_from():
-    layout = Layout.from_stretcher_bond(wall=WALL)
+    layout = Layout.make_stretcher_bond(wall=WALL)
     assert layout.rows
-    assert len(layout.rows) == 32
+    assert len(layout.rows) == 61
     for row in layout.rows:
-        assert len(row) == 11
+        assert len(row.bits) == 11
 
 
 def test_print():
-    layout = Layout.from_stretcher_bond(WALL)
-    s0 = State.initial(layout, ROBOT_813)
+    layout = Layout.make_stretcher_bond(WALL)
+    s0 = State.make(layout, ROBOT_813)
     s0.print()
 
 
 def test_steps():
-    layout = Layout.from_stretcher_bond(WALL)
-    s0 = State.initial(layout, ROBOT_813)
-    for state in s0.steps():
+    layout = Layout.make_stretcher_bond(WALL)
+    s0 = State.make(layout, ROBOT_813)
+    for step, state in enumerate(s0.steps()):
+        print("step =", step)
+        print("robot = ", state.robot)
         state.print()
+        print()
 
 
 if __name__ == "__main__":
