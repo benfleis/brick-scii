@@ -61,6 +61,8 @@ Let's display ASCII:
 
 - Testing is adhoc and minimal - specific unit tests for things that had bugs and needed a specific test/fix approach. The tests themselves are incomplete, happy to discuss how I'd approach IRL.
 
+- I have done some testing with Bonus 1, it partially works. Need to fix a bug in raise functionality to finish generalized.
+
 ### Code Notes
 
 - Approach - hackathon + 1st pass refinement.
@@ -80,3 +82,5 @@ Let's display ASCII:
 - Stride planning is nice but imperfect. Handing in to get the ball rolling but it's the next thing I'll play with. Lowest frontier is a good starting point. My instinct says that greedy selecting the max number of unblocked bricks in 1 position is probably "good enough". I imagine the "upward" pyramid from a brick as projected dependency-set, trimmed by the robot-boundingbox
 
 - I treated head joints as first-class bits, but did not prevent them from being installed without neighboring bricks. TODO!
+
+- Raise function broken for non-test walls.

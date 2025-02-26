@@ -13,6 +13,7 @@ from colored import Fore, Style
 from dataclasses import dataclass
 from itertools import cycle, dropwhile, islice, takewhile
 import copy
+import sys
 import typing
 
 ########################################################################
@@ -525,16 +526,22 @@ def pattern_to_layout(pattern: str, row_cnt: int) -> tuple[BoundingBox, list[str
     row = Row.make(0, pattern)
     dx = row.bits[-1].bbox.upper_right.x - row.bits[0].bbox.lower_left.x
     dy = row_cnt * COURSE_DY
-    wall = _BBox(lower_left=ORIGIN, upper_right=_CC(dx, dy))
+    wall = _BBox(ORIGIN, _CC(dx, dy))
     row_strs = ([pattern, "".join(reversed(pattern))] * (1 + row_cnt // 2))[:row_cnt]
     return wall, row_strs
 
 
-def _test_steps():
+def main(args):
     layout = Layout.make_stretcher_bond(WALL_2320)
-    # wall, row_strs = pattern_to_layout("H|W|W|W", 4)
-    # layout = Layout.make(wall, row_strs)
-    s0 = State.make(layout, ROBOT_813)
+    robot = ROBOT_813
+
+    # NOTE: tweak here for variations
+    wall, row_strs = pattern_to_layout("H|W|W|W", 4)
+    layout = Layout.make(wall, row_strs)
+    # TODO: breaks with different robot
+    # robot = _BBox(ORIGIN, _CC(600, 2000))
+
+    s0 = State.make(layout, robot)
     for step, state in enumerate(s0.steps()):
         print("step =", step)
         print("robot =", state.robot)
@@ -543,4 +550,4 @@ def _test_steps():
 
 
 if __name__ == "__main__":
-    _test_steps()
+    main(sys.argv[:])
