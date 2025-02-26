@@ -536,8 +536,8 @@ def main(args):
     robot = ROBOT_813
 
     # NOTE: tweak here for variations
-    wall, row_strs = pattern_to_layout("H|W|W|W", 4)
-    layout = Layout.make(wall, row_strs)
+    # wall, row_strs = pattern_to_layout("H|W|W|W", 4)
+    # layout = Layout.make(wall, row_strs)
     # TODO: breaks with different robot
     # robot = _BBox(ORIGIN, _CC(600, 2000))
 
