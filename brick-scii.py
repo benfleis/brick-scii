@@ -1,31 +1,36 @@
 #!/usr/bin/env python3
 
 ##
-# Assumptions:
+# NOTE: also to see in `README.md`
 # - units in integer micrometers (avoid FP for now, but accommodate half mms)
+# - strong pref immutable/dataclass for most things, but leverage OO-ish funcs
+# - constants >> magic strings
+# - "bit" is the name for all installed things: bricks & mortar; bad name but works for now
+# - docs are minimal, not prod ready
 #
 
 from colored import Fore, Style
 from dataclasses import dataclass
-from itertools import dropwhile, takewhile
+from itertools import cycle, dropwhile, islice, takewhile
 import copy
 import typing
 
-# NOTE: I prefer immutables when reasonable, and have several helper immutables with oo-ish
-# helper functions below.
+########################################################################
+# Data defs
+#
 
 
 @dataclass(frozen=True)
 class Bit:
     name: str
-    key: str
+    key: str  # single char rep'ing bit type, could later fancy for e.g. dynamic brick sizes
     dx: int
     dy: int
-    # dz: int
+    # dz: int # unmodeled
 
 
 class Position(typing.NamedTuple):
-    """Position is brick/row index within a layout."""
+    """Logical Position for bit/row indices within a layout."""
 
     bit: int  # analogue: Coordinate.x
     row: int  # analogue: Coordinate.y
@@ -44,15 +49,20 @@ class Coordinate(typing.NamedTuple):
         return self.__class__(self.x, self.y + dy) if dy else self
 
 
-ORIGIN = Coordinate(0, 0)
-
-
 @dataclass(frozen=True)
 class BoundingBox:
     """BoundingBox from 2 Coordinates, lower left and upper right"""
 
     lower_left: Coordinate
     upper_right: Coordinate
+
+    @classmethod
+    def make(cls, c0: Coordinate, c1: Coordinate) -> typing.Self:
+        x_ll = min(c0.x, c1.x)
+        x_ur = max(c0.x, c1.x)
+        y_ll = min(c0.y, c1.y)
+        y_ur = max(c0.y, c1.y)
+        return cls(lower_left=_CC(x_ll, y_ll), upper_right=_CC(x_ur, y_ur))
 
     def stride(self, dx: int) -> typing.Self:
         return (
@@ -98,13 +108,21 @@ class BoundingBox:
         )
         return touches_x and touches_y
 
-    # @property
     def dx(self) -> int:
         return self.upper_right.x - self.lower_left.x
 
-    # @property
     def dy(self) -> int:
         return self.upper_right.y - self.lower_left.y
+
+
+# local make shorthands for long name, since it's usually quite evident in-situ
+_Pos = Position
+_CC = Coordinate
+_BBox = BoundingBox.make
+
+########################################################################
+# constants
+#
 
 
 # NOTE: upper case means _placed_ brick in State so use Uppers here
@@ -113,17 +131,18 @@ HALF_BRICK = Bit("half brick", key="H", dx=100_000, dy=WHOLE_BRICK.dy)
 HEAD_JOINT = Bit("head joint", key="|", dx=10_000, dy=WHOLE_BRICK.dy)
 BED_JOINT = Bit("bed joint", key="_", dx=1_000, dy=12_500)
 
-bits = [WHOLE_BRICK, HALF_BRICK, HEAD_JOINT, BED_JOINT]
-bits_by_key = {b.key: b for b in bits}
-bit_keys = list(bits_by_key.keys())
-row_bit_keys = [WHOLE_BRICK.key, HALF_BRICK.key, HEAD_JOINT.key]
+BITS = [WHOLE_BRICK, HALF_BRICK, HEAD_JOINT, BED_JOINT]
+BITS_BY_KEY = {b.key: b for b in BITS}
+BIT_KEYS = list(BITS_BY_KEY.keys())
+ROW_BIT_KEYS = [WHOLE_BRICK.key, HALF_BRICK.key, HEAD_JOINT.key]
 
-COURSE = Bit("course", key="", dx=1_000, dy=WHOLE_BRICK.dy + BED_JOINT.dy)
 
-WALL_2320 = BoundingBox(
-    lower_left=ORIGIN, upper_right=Coordinate(x=2300_000, y=2000_000)
-)
-ROBOT_813 = BoundingBox(ORIGIN, Coordinate(x=800_000, y=1300_000))
+ORIGIN = Coordinate(0, 0)
+COURSE_DY = WHOLE_BRICK.dy + BED_JOINT.dy
+
+# Specifics of the test
+WALL_2320 = _BBox(ORIGIN, _CC(x=2300_000, y=2000_000))
+ROBOT_813 = _BBox(ORIGIN, _CC(x=800_000, y=1300_000))
 
 
 @dataclass(frozen=True)
@@ -144,14 +163,11 @@ class Row:
         row: list[PositionedBit] = []
         x0 = 0
         for bit_idx, bit_key in enumerate(row_str):
-            bit = bits_by_key[bit_key]
+            bit = BITS_BY_KEY[bit_key]
             pb = PositionedBit(
                 bit=bit,
-                pos=Position(bit=bit_idx, row=row_idx),
-                bbox=BoundingBox(
-                    lower_left=Coordinate(x0, y0),
-                    upper_right=Coordinate(x0 + bit.dx, y1),
-                ),
+                pos=_Pos(bit=bit_idx, row=row_idx),
+                bbox=_BBox(_CC(x0, y0), _CC(x0 + bit.dx, y1)),
             )
             row.append(pb)
             x0 += bit.dx
@@ -167,11 +183,10 @@ class Row:
         return out if not to_lower else out.lower()
 
     def overlaps_x(self, bbox: BoundingBox) -> list[PositionedBit]:
-        """Return sequence of bricks contained by BoundingBox `bbox`. `include_partial` means include
-        bricks that are partially in, and partially out, of bbox."""
-        bbox = BoundingBox(
-            lower_left=Coordinate(bbox.lower_left.x, self.bits[0].bbox.lower_left.y),
-            upper_right=Coordinate(bbox.upper_right.x, self.bits[0].bbox.upper_right.y),
+        """Return sequence of bricks overlapping _in x axis_ of `bbox`."""
+        bbox = _BBox(
+            _CC(bbox.lower_left.x, self.bits[0].bbox.lower_left.y),
+            _CC(bbox.upper_right.x, self.bits[0].bbox.upper_right.y),
         )
         it = iter(self.bits)
         it = dropwhile(lambda pb: not bbox.overlaps(pb.bbox), it)
@@ -206,21 +221,32 @@ class Layout:
             dy = row.bits[-1].bbox.upper_right.y - row.bits[0].bbox.lower_left.y
             assert sum_x == dx and dx == wall.dx()
             assert WHOLE_BRICK.dy == dy
-        assert wall.dy() == len(rows) * COURSE.dy
+        assert wall.dy() == len(rows) * COURSE_DY
 
         return cls(wall, rows)
 
     @classmethod
     def make_stretcher_bond(cls, wall: BoundingBox) -> typing.Self:
         # XXX: hard code the layout
-        rows = [
-            "|".join("W" * 10 + "H"),
-            "|".join("H" + "W" * 10),
-        ] * 16
+        # rows = [
+        # "|".join("W" * 10 + "H"),
+        # "|".join("H" + "W" * 10),
+        # ] * 16
 
+        # require that width satisfies HALF + N * (HEAD+WHOLE)
+        dx = wall.dx()
+        whole_cnt = (dx - HALF_BRICK.dx) // (HEAD_JOINT.dx + WHOLE_BRICK.dx)
+        assert dx == HALF_BRICK.dx + (whole_cnt * (HEAD_JOINT.dx + WHOLE_BRICK.dx))
+        dy = wall.dy()
+        row_cnt = dy // COURSE_DY
+        assert dy % COURSE_DY == 0
+
+        pattern = "H" + "|W" * whole_cnt
+        rows = list(islice(cycle([pattern, "".join(reversed(pattern))]), row_cnt))
         return cls.make(wall, rows)
 
 
+# NOTE: can adjust to display, but these felt good for moderate dims
 _HALF_CHARS = 4
 _WHOLE_CHARS = _HALF_CHARS * 2
 
@@ -230,14 +256,22 @@ BIT_FORMATS_BY_KEY: dict[str, tuple[str, str]] = {
     HEAD_JOINT.key: ("|", " "),
 }
 
+# Quick magic strings avoid
+
+INITIAL = " "
+FRONTIER = "f"
+COMPLETE = "C"
+
+STATUSES = [INITIAL, FRONTIER, COMPLETE]
+
 
 def format_bit(bit: Bit, status: str, reachable: bool) -> str:
     complete, incomplete = BIT_FORMATS_BY_KEY[bit.key]
-    if status == "C":
+    if status == COMPLETE:
         return f"{Fore.red}{complete}"
-    elif status == "f" and reachable:
+    elif status == FRONTIER and reachable:
         return f"{Fore.green}{incomplete}"
-    elif status == "f":
+    elif status == FRONTIER:
         return f"{Fore.yellow}{incomplete}"
     elif reachable:
         return f"{Fore.blue}{incomplete}"
@@ -249,12 +283,12 @@ def format_bit(bit: Bit, status: str, reachable: bool) -> str:
 class State:
     layout: Layout
     robot: BoundingBox
-    status: list[str]  # NOTE: map= " ": non-frontier, "f": frontier, "C": complete
+    status: list[str]
 
     @classmethod
     def make(cls, layout: Layout, robot: BoundingBox) -> typing.Self:
-        status: list[str] = [" " * len(row.bits) for row in layout.rows]
-        status[0] = "f" * len(layout.rows[0].bits)
+        status: list[str] = [INITIAL * len(row.bits) for row in layout.rows]
+        status[0] = FRONTIER * len(layout.rows[0].bits)
         return cls(layout=layout, robot=robot, status=status)
 
     def print(self):
@@ -276,8 +310,8 @@ class State:
         row = self.status[row_idx]
         bit_status = row[bit_idx]
         assert not bit_status.isupper(), "set_frontier called on completed bit"
-        if bit_status == " ":
-            updated_row = row[:bit_idx] + "f" + row[bit_idx + 1 :]
+        if bit_status == INITIAL:
+            updated_row = row[:bit_idx] + FRONTIER + row[bit_idx + 1 :]
             updated_rows = copy.copy(self.status)
             updated_rows[row_idx] = updated_row
             return copy.replace(self, status=updated_rows)
@@ -290,9 +324,9 @@ class State:
         bit_idx, row_idx = pos
         row = self.status[row_idx]
         bit_status = row[bit_idx]
-        assert bit_status != " ", "set_complete called on non frontier bit"
+        assert bit_status != INITIAL, "set_complete called on non frontier bit"
         if bit_status.islower():
-            updated_row = row[:bit_idx] + "C" + row[bit_idx + 1 :]
+            updated_row = row[:bit_idx] + COMPLETE + row[bit_idx + 1 :]
             updated_rows = copy.copy(self.status)
             updated_rows[row_idx] = updated_row
             return copy.replace(self, status=updated_rows)
@@ -306,8 +340,8 @@ class State:
 
     def step(self) -> typing.Self | None:
         # lay brick in reachable frontier
-        if to_complete := self.reachable_frontier_head():
-            return self.install_bit(to_complete)
+        if to_install := self.reachable_frontier_head():
+            return self.install_bit(to_install)
 
         # NOTE: presume costs of brick << stride << raise_
         # frontier plucking is relatively straightforward, greedy lowest is probably enough
@@ -321,11 +355,11 @@ class State:
 
         # stride first - find lowest unreachable frontiers, stride to them (ideally centered)
         if pair := next(
-            filter(lambda pair: "f" in pair[1], enumerate(self.status)), None
+            filter(lambda pair: FRONTIER in pair[1], enumerate(self.status)), None
         ):
             (row_idx, row_fs) = pair
-            first = row_fs.find("f")
-            last = row_fs.rfind("f")
+            first = row_fs.find(FRONTIER)
+            last = row_fs.rfind(FRONTIER)
             target_x = self.layout.rows[row_idx].bits[first].bbox.lower_left.x
             target_dx = self.layout.rows[row_idx].dx(first, last)
             if margin := self.robot.dx() - target_dx:
@@ -336,8 +370,8 @@ class State:
                 return copy.replace(self, robot=self.robot.stride(stride))
 
         # raise robot
-        robot_course_cnt = self.robot.dy() // COURSE.dy
-        rise = robot_course_cnt * COURSE.dy
+        robot_course_cnt = self.robot.dy() // COURSE_DY
+        rise = robot_course_cnt * COURSE_DY
         risen_robot = self.robot.raise_(rise)
         if risen_robot.lower_left.y < self.layout.wall.dy():
             return copy.replace(self, robot=risen_robot)
@@ -351,7 +385,7 @@ class State:
         # bottom to top, left to right
         for pb_row, status_row in zip(self.layout.rows, self.status):
             for pb, status in zip(pb_row.bits, status_row):
-                if status == "f" and self.is_reachable(pb.bbox):
+                if status == FRONTIER and self.is_reachable(pb.bbox):
                     yield pb
 
     def install_bit(self, pb: PositionedBit) -> typing.Self:
@@ -361,7 +395,7 @@ class State:
             up_row = rv.layout.rows[pb.pos.row + 1]
             new_frontier = [
                 pb
-                for pb in up_row.overlaps_x(pb.bbox.raise_(COURSE.dy))
+                for pb in up_row.overlaps_x(pb.bbox.raise_(COURSE_DY))
                 if rv.is_supported(pb)
             ]
             for frontier_pb in new_frontier:
@@ -382,9 +416,9 @@ class State:
         # shift bbox definition to up_row so we can use contains
         lhs_x = support_overlaps[0].bbox.lower_left.x
         rhs_x = support_overlaps[-1].bbox.upper_right.x
-        support_bbox = BoundingBox(
-            lower_left=Coordinate(lhs_x, pb.bbox.lower_left.y),
-            upper_right=Coordinate(rhs_x, pb.bbox.upper_right.y),
+        support_bbox = _BBox(
+            _CC(lhs_x, pb.bbox.lower_left.y),
+            _CC(rhs_x, pb.bbox.upper_right.y),
         )
         return support_bbox.contains(pb.bbox)
 
@@ -395,11 +429,6 @@ class State:
             cur = cur.step()
 
 
-def _test():
-    test_rows_from()
-    test_print()
-
-
 def _test_rows_from():
     layout = Layout.make_stretcher_bond(wall=WALL_2320)
     assert layout.rows
@@ -408,20 +437,20 @@ def _test_rows_from():
         assert len(row.bits) == 11
 
 
-def _test_print():
+def test_print():
     layout = Layout.make_stretcher_bond(WALL_2320)
     s0 = State.make(layout, ROBOT_813)
     s0.print()
 
 
-def _bbox(x0, x1, y0=0, y1=1):
-    return BoundingBox(Coordinate(x0, y0), Coordinate(x1, y1))
+def _t_bbox(x0, x1, y0=0, y1=1):
+    return _BBox(_CC(x0, y0), _CC(x1, y1))
 
 
-b02 = _bbox(0, 2)
-b13 = _bbox(1, 3)
-b24 = _bbox(2, 4)
-b35 = _bbox(3, 5)
+b02 = _t_bbox(0, 2)
+b13 = _t_bbox(1, 3)
+b24 = _t_bbox(2, 4)
+b35 = _t_bbox(3, 5)
 
 
 def test_boundingbox():
@@ -465,37 +494,38 @@ def test_overlaps_x():
     rWWH = Row.make(0, "W|W|H")
     r_dx = rHWW.dx()
 
-    # ols = rHWW.overlaps_x(_bbox(0, r_dx))
-    # assert len(ols) == 5
-    # assert ols == rHWW.bits
-    #
-    # ols = rHWW.overlaps_x(_bbox(1, r_dx - 1))
-    # assert len(ols) == 5
-    # assert ols == rHWW.bits
-    #
-    # ols = rHWW.overlaps_x(_bbox(HALF_BRICK.dx - 1, r_dx - 1))
-    # assert len(ols) == 5
-    # assert ols == rHWW.bits
+    ols = rHWW.overlaps_x(_t_bbox(0, r_dx))
+    assert len(ols) == 5
+    assert ols == rHWW.bits
 
-    ols = rHWW.overlaps_x(_bbox(HALF_BRICK.dx, r_dx))
+    ols = rHWW.overlaps_x(_t_bbox(1, r_dx - 1))
+    assert len(ols) == 5
+    assert ols == rHWW.bits
+
+    ols = rHWW.overlaps_x(_t_bbox(HALF_BRICK.dx - 1, r_dx - 1))
+    assert len(ols) == 5
+    assert ols == rHWW.bits
+
+    ols = rHWW.overlaps_x(_t_bbox(HALF_BRICK.dx, r_dx))
     assert len(ols) == 4
     assert ols == rHWW.bits[1:]
 
 
 patterns = [
-    "H",
-    "W",
-    "H" + "|W" * 1,
-    "H" + "|W" * 2,
-    "H" + "|W" * 3,
+    ["H"],
+    ["W"],
+    ["W", "HH"],
+    ["HW", "WH"],
+    ["HWHW", "WHWH"],
+    ["HWWW", "WHWW", "WWHW", "WWWH"],
 ]
 
 
 def pattern_to_layout(pattern: str, row_cnt: int) -> tuple[BoundingBox, list[str]]:
     row = Row.make(0, pattern)
     dx = row.bits[-1].bbox.upper_right.x - row.bits[0].bbox.lower_left.x
-    dy = row_cnt * COURSE.dy
-    wall = BoundingBox(lower_left=ORIGIN, upper_right=Coordinate(dx, dy))
+    dy = row_cnt * COURSE_DY
+    wall = _BBox(lower_left=ORIGIN, upper_right=_CC(dx, dy))
     row_strs = ([pattern, "".join(reversed(pattern))] * (1 + row_cnt // 2))[:row_cnt]
     return wall, row_strs
 

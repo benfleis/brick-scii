@@ -1,5 +1,18 @@
 # Ben Fleis - Monumental Take Home - 2025-02-24
 
+## tl;dr - Watch It Go
+
+Need to have python 3.13 - I used 1 feature there but will tweak it later to be more broadly compatible. (Didn't realize it was a new-ish feature.)
+
+```
+    pip install colored pytest
+    pytest -vv brick-scii.py
+    ./brick-scii.py | less -y 35 -z 35
+```
+
+Using less allows Space/f to go forward 1 step, and b to go backward.
+
+
 ## Brief Design Notes
 
 (See also: `notes/*` for my on-the-fly thoughts and notes.)
@@ -38,4 +51,32 @@ Let's display ASCII:
 - yellow for ineligible (unlocked + unreachable by robot)
 
 
+## Disorganized Notes during dev
 
+### Solution Notes
+
+- Stride planning is the magic sauce. I tried 2.5 versions. Where I ended has some obvious improvement possibilities, I assume we'll discuss.
+
+- Approach is currently entirely Cartesian, should allow arbitrary elements/brick sizes, but not tested. Did manual testing with various wall sizes, layouts and robot reaches.
+
+- Testing is adhoc and minimal - specific unit tests for things that had bugs and needed a specific test/fix approach. The tests themselves are incomplete, happy to discuss how I'd approach IRL.
+
+### Code Notes
+
+- Approach - hackathon + 1st pass refinement.
+
+- I began with a string based rep to keep it simple. I got partial functionality pretty quickly here, but hit-the-wall (pun intended!) at my first attempt to properly calculate "support" dependencies. A simple-overzealous approximation with strings is simply every index is supported by its immediate underneath+2 siblings. This is enough to make progress and build walls. After quickly confirming this, I moved on from the string rep, and used strings as human-friendly layout spec, and internally converted to using `PositionedBits`. (Bit = Item.)
+
+- This problem wants to be solved in a functional/immutable way, as a series of states and actions, ffwd/rewind etc. As much as reasonable in python I approached this way. But I didn't get to ffwd/rewind. (Not implying that it's required for that functionality, but is a natural approach IMHO.)
+
+- Leveraged python types where reasonable to avoid obvious mistakes, but avoid zealotry. Win for disambiguating e.g. Cartesian Coordinates from Logical Positions, etc.
+
+- Prefer named constants; they're easy to maintain and avoid face-palm typos.
+
+- Single file python. IRL would split things up, but no need for this.
+
+## Known / Anticipated Warts
+
+- Stride planning is nice but imperfect. Handing in to get the ball rolling but it's the next thing I'll play with. Lowest frontier is a good starting point. My instinct says that greedy selecting the max number of unblocked bricks in 1 position is probably "good enough". I imagine the "upward" pyramid from a brick as projected dependency-set, trimmed by the robot-boundingbox
+
+- I treated head joints as first-class bits, but did not prevent them from being installed without neighboring bricks. TODO!
