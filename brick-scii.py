@@ -282,6 +282,22 @@ def format_bit(bit: Bit, status: str, reachable: bool) -> str:
 
 @dataclass(frozen=True)
 class State:
+    """
+    State keeps refs to layout/wall, and manages robot action. Every action produces a new state.
+
+    The logical layout is structurally mirrored with status cells, which can be
+    initial, frontier, or complete. States can be set and checked. (Clear currently not needed.)
+
+    Additionally provide 2 key functions that allow decision making:
+    - is_reachable tells whether the robot can reach a positioned bit.
+    - is_supported tells whether a positioned bit may be built (ie, the things underneath are complete)
+
+    Main access point is the `steps()` function, which iterates through all steps until completion.
+
+    Each step attempts to place a reachable frontier brick/mortar. If none available, consider a
+    robot stride (x axis). As last resort consider a robot raise (y axis).
+    """
+
     layout: Layout
     robot: BoundingBox
     status: list[str]
