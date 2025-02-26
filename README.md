@@ -17,7 +17,7 @@ Using less allows Space/f to go forward 1 step, and b to go backward.
 - Most fun take home I've ever had, certainly only one I made videos to share :)
 - Simplest Approach: Design + Plan/Execute are separate phases. Treat as layout with separate state machine.
 - Optimizing Strides is key, current solution is decent, will add more after first submit.
-- Full support and partial success for Bonus 1, but needs a few tweaks to fully work.
+- Bonus 1 addressed with English Cross; adapted outputs to work better with head joint display
 - Perhaps best to start at `State` class for top-level reading.
 
 ## Brief Design Notes - Written BEFORE Coding

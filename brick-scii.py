@@ -127,19 +127,29 @@ _BBox = BoundingBox.make
 
 # NOTE: units are micrometers so we can avoid FP hassles for now
 
-WHOLE_BRICK = Bit("whole brick", key="W", dx=210_000, dy=50_000)
-HALF_BRICK = Bit("half brick", key="H", dx=100_000, dy=WHOLE_BRICK.dy)
-HEAD_JOINT = Bit("head joint", key="|", dx=10_000, dy=WHOLE_BRICK.dy)
-BED_JOINT = Bit("bed joint", key="_", dx=1_000, dy=12_500)
+BRICK_DX = 210_000
+BRICK_DY = 50_000
 
-BITS = [WHOLE_BRICK, HALF_BRICK, HEAD_JOINT, BED_JOINT]
+HEAD_JOINT_DX = 10_000
+BED_JOINT_DY = 12_500
+
+COURSE_DY = BRICK_DY + BED_JOINT_DY
+
+# These defs honor the "front face" nature, ignore actual 3d (cut) bricks
+HEAD_JOINT = Bit("head joint", key="|", dx=HEAD_JOINT_DX, dy=BRICK_DY)
+STRETCHER = Bit("stretcher", key="S", dx=BRICK_DX, dy=BRICK_DY)
+HEADER = Bit("header", key="H", dx=(BRICK_DX - HEAD_JOINT.dx) // 2, dy=BRICK_DY)
+QUEEN_CLOSER = Bit(
+    "queen closer", key="Q", dx=(HEADER.dx - HEAD_JOINT.dx) // 2, dy=BRICK_DY
+)
+
+BITS = [HEAD_JOINT, STRETCHER, HEADER, QUEEN_CLOSER]
 BITS_BY_KEY = {b.key: b for b in BITS}
 BIT_KEYS = list(BITS_BY_KEY.keys())
-ROW_BIT_KEYS = [WHOLE_BRICK.key, HALF_BRICK.key, HEAD_JOINT.key]
 
+assert (STRETCHER.dx - HEAD_JOINT_DX) // 2 == HEADER.dx
 
 ORIGIN = Coordinate(0, 0)
-COURSE_DY = WHOLE_BRICK.dy + BED_JOINT.dy
 
 # Specifics of the test
 WALL_2320 = _BBox(ORIGIN, _CC(x=2300_000, y=2000_000))
@@ -159,8 +169,8 @@ class Row:
 
     @classmethod
     def make(cls, row_idx: int, row_str: str) -> typing.Self:
-        y0 = row_idx * WHOLE_BRICK.dy
-        y1 = y0 + WHOLE_BRICK.dy
+        y0 = row_idx * STRETCHER.dy
+        y1 = y0 + STRETCHER.dy
         row: list[PositionedBit] = []
         x0 = 0
         for bit_idx, bit_key in enumerate(row_str):
@@ -224,7 +234,7 @@ class Layout:
             dx = row.pos_bits[-1].bbox.upper_right.x - row.pos_bits[0].bbox.lower_left.x
             dy = row.pos_bits[-1].bbox.upper_right.y - row.pos_bits[0].bbox.lower_left.y
             assert sum_x == dx and dx == wall.dx()
-            assert WHOLE_BRICK.dy == dy
+            assert STRETCHER.dy == dy
         assert wall.dy() == len(rows) * COURSE_DY
 
         return cls(wall, rows)
@@ -232,26 +242,52 @@ class Layout:
     @classmethod
     def make_stretcher_bond(cls, wall: BoundingBox) -> typing.Self:
         # require that width satisfies HALF + N * (HEAD+WHOLE)
+        # could also support whole || double-half ends
         dx = wall.dx()
-        whole_cnt = (dx - HALF_BRICK.dx) // (HEAD_JOINT.dx + WHOLE_BRICK.dx)
-        assert dx == HALF_BRICK.dx + (whole_cnt * (HEAD_JOINT.dx + WHOLE_BRICK.dx))
+        stretcher_cnt = (dx - HEADER.dx) // (HEAD_JOINT.dx + STRETCHER.dx)
+        pattern = HEAD_JOINT.key.join(HEADER.key + (STRETCHER.key * stretcher_cnt))
+        assert dx == Row.make(0, pattern).dx(), "pattern DX incorrect: " + pattern
+
         dy = wall.dy()
         row_cnt = dy // COURSE_DY
         assert dy % COURSE_DY == 0
 
-        pattern = "H" + "|W" * whole_cnt
         rows = list(islice(cycle([pattern, "".join(reversed(pattern))]), row_cnt))
         return cls.make(wall, rows)
 
+    @classmethod
+    def make_english_cross_bond(cls, wall: BoundingBox) -> typing.Self:
+        # forms:
+        # - S*
+        # - HQ(H*)QH
+        dx, dy = wall.dx(), wall.dy()
+        stretcher_cnt = (dx + HEAD_JOINT.dx) // (HEAD_JOINT.dx + STRETCHER.dx)
+        header_cnt = (stretcher_cnt * 2) - 3
+        patterns = [
+            # S*
+            HEAD_JOINT.key.join(STRETCHER.key * stretcher_cnt),
+            # HQ(H*)QH
+            HEAD_JOINT.key.join(
+                (HEADER.key + QUEEN_CLOSER.key)
+                + (HEADER.key * header_cnt)
+                + (QUEEN_CLOSER.key + HEADER.key)
+            ),
+        ]
+        for pattern in patterns:
+            assert dx == Row.make(0, pattern).dx(), "pattern DX incorrect: " + pattern
 
-# NOTE: can adjust to display, but these felt good for moderate dims
-_HALF_CHARS = 4
-_WHOLE_CHARS = _HALF_CHARS * 2
+        row_cnt = dy // COURSE_DY
+        assert dy % COURSE_DY == 0
+
+        rows = list(islice(cycle(patterns), row_cnt))
+        return cls.make(wall, rows)
+
 
 BIT_FORMATS_BY_KEY: dict[str, tuple[str, str]] = {
-    WHOLE_BRICK.key: ("▓" * _WHOLE_CHARS, "░" * _WHOLE_CHARS),
-    HALF_BRICK.key: ("▓" * _HALF_CHARS, "░" * _HALF_CHARS),
-    HEAD_JOINT.key: ("|", " "),
+    STRETCHER.key: ("[⊠⊠⊠⊠⊠⊠⊠⊠⊠⊠]", "<==========>"),
+    HEADER.key: ("[⊞⊞⊞⊞]", "<---->"),
+    QUEEN_CLOSER.key: ("[⊡]", "<->"),
+    HEAD_JOINT.key: ("", ""),
 }
 
 # Quick magic strings avoid
@@ -301,7 +337,7 @@ class State:
 
     @classmethod
     def make(cls, layout: Layout, robot: BoundingBox) -> typing.Self:
-        assert robot.contains(_BBox(ORIGIN, _CC(WHOLE_BRICK.dx, WHOLE_BRICK.dy))), (
+        assert robot.contains(_BBox(ORIGIN, _CC(STRETCHER.dx, STRETCHER.dy))), (
             "robot smaller than brick, probably expressed in mm instead of µm"
         )
         status: list[str] = [INITIAL * len(row.pos_bits) for row in layout.rows]
@@ -510,34 +546,34 @@ def test_boundingbox():
 
 
 def test_overlaps_x():
-    rHWW = Row.make(0, "H|W|W")
-    rWWH = Row.make(0, "W|W|H")
-    r_dx = rHWW.dx()
+    rHSS = Row.make(0, "H|S|S")
+    rSSH = Row.make(0, "S|S|H")
+    r_dx = rHSS.dx()
 
-    ols = rHWW.overlaps_x(_t_bbox(0, r_dx))
+    ols = rHSS.overlaps_x(_t_bbox(0, r_dx))
     assert len(ols) == 5
-    assert ols == rHWW.pos_bits
+    assert ols == rHSS.pos_bits
 
-    ols = rHWW.overlaps_x(_t_bbox(1, r_dx - 1))
+    ols = rHSS.overlaps_x(_t_bbox(1, r_dx - 1))
     assert len(ols) == 5
-    assert ols == rHWW.pos_bits
+    assert ols == rHSS.pos_bits
 
-    ols = rHWW.overlaps_x(_t_bbox(HALF_BRICK.dx - 1, r_dx - 1))
+    ols = rHSS.overlaps_x(_t_bbox(HEADER.dx - 1, r_dx - 1))
     assert len(ols) == 5
-    assert ols == rHWW.pos_bits
+    assert ols == rHSS.pos_bits
 
-    ols = rHWW.overlaps_x(_t_bbox(HALF_BRICK.dx, r_dx))
+    ols = rHSS.overlaps_x(_t_bbox(HEADER.dx, r_dx))
     assert len(ols) == 4
-    assert ols == rHWW.pos_bits[1:]
+    assert ols == rHSS.pos_bits[1:]
 
 
 patterns = [
     ["H"],
-    ["W"],
-    ["W", "HH"],
-    ["HW", "WH"],
-    ["HWHW", "WHWH"],
-    ["HWWW", "WHWW", "WWHW", "WWWH"],
+    ["S"],
+    ["S", "HH"],
+    ["HS", "SH"],
+    ["HSHS", "SHSH"],
+    ["HSSS", "SHSS", "SSHS", "SSSH"],
 ]
 
 
@@ -550,14 +586,31 @@ def pattern_to_layout(pattern: str, row_cnt: int) -> tuple[BoundingBox, list[str
     return wall, row_strs
 
 
+def test_make_stretcher():
+    layout = Layout.make_stretcher_bond(WALL_2320)
+    robot = ROBOT_813
+    list(enumerate(State.make(layout, robot).steps()))
+
+
+def test_make_english_cross():
+    wall = _BBox(ORIGIN, _CC(2190_000, 2000_000))
+    layout = Layout.make_english_cross_bond(wall)
+    list(enumerate(State.make(layout, ROBOT_813).steps()))
+
+
 def main(args):
+    # stretcher
     layout = Layout.make_stretcher_bond(WALL_2320)
     robot = ROBOT_813
 
+    # english cross
+    # wall = _BBox(ORIGIN, _CC(2190_000, 2000_000))
+    # layout = Layout.make_english_cross_bond(wall)
+
     # NOTE: tweak here for variations
-    wall, row_strs = pattern_to_layout("H|W|W|W", 40)
-    layout = Layout.make(wall, row_strs)
-    robot = _BBox(ORIGIN, _CC(400_000, 2000_000))
+    # wall, row_strs = pattern_to_layout("S|S|S|S|S|S|S|S|S|S", 32)
+    # layout = Layout.make(wall, row_strs)
+    # robot = _BBox(ORIGIN, _CC(400_000, 2000_000))
 
     s0 = State.make(layout, robot)
     for step, state in enumerate(s0.steps()):
