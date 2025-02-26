@@ -125,8 +125,8 @@ _BBox = BoundingBox.make
 # constants
 #
 
+# NOTE: units are micrometers so we can avoid FP hassles for now
 
-# NOTE: upper case means _placed_ brick in State so use Uppers here
 WHOLE_BRICK = Bit("whole brick", key="W", dx=210_000, dy=50_000)
 HALF_BRICK = Bit("half brick", key="H", dx=100_000, dy=WHOLE_BRICK.dy)
 HEAD_JOINT = Bit("head joint", key="|", dx=10_000, dy=WHOLE_BRICK.dy)
@@ -155,7 +155,7 @@ class PositionedBit:
 
 @dataclass(frozen=True)
 class Row:
-    bits: list[PositionedBit]
+    pos_bits: list[PositionedBit]
 
     @classmethod
     def make(cls, row_idx: int, row_str: str) -> typing.Self:
@@ -180,21 +180,24 @@ class Row:
     __repr__ = __str__
 
     def format(self, to_lower: bool = False) -> str:
-        out = "".join(map(lambda pb: pb.bit.key, self.bits))
+        out = "".join(map(lambda pb: pb.bit.key, self.pos_bits))
         return out if not to_lower else out.lower()
 
     def overlaps_x(self, bbox: BoundingBox) -> list[PositionedBit]:
         """Return sequence of bricks overlapping _in x axis_ of `bbox`."""
         bbox = _BBox(
-            _CC(bbox.lower_left.x, self.bits[0].bbox.lower_left.y),
-            _CC(bbox.upper_right.x, self.bits[0].bbox.upper_right.y),
+            _CC(bbox.lower_left.x, self.pos_bits[0].bbox.lower_left.y),
+            _CC(bbox.upper_right.x, self.pos_bits[0].bbox.upper_right.y),
         )
-        it = iter(self.bits)
+        it = iter(self.pos_bits)
         it = dropwhile(lambda pb: not bbox.overlaps(pb.bbox), it)
         return list(takewhile(lambda pb: bbox.overlaps(pb.bbox), it))
 
     def dx(self, first: int = 0, last: int = -1) -> int:
-        return self.bits[last].bbox.upper_right.x - self.bits[first].bbox.lower_left.x
+        return (
+            self.pos_bits[last].bbox.upper_right.x
+            - self.pos_bits[first].bbox.lower_left.x
+        )
 
 
 @dataclass(frozen=True)
@@ -217,9 +220,9 @@ class Layout:
 
         # validate some things
         for row in rows:
-            sum_x = sum((pb.bit.dx for pb in row.bits))
-            dx = row.bits[-1].bbox.upper_right.x - row.bits[0].bbox.lower_left.x
-            dy = row.bits[-1].bbox.upper_right.y - row.bits[0].bbox.lower_left.y
+            sum_x = sum((pb.bit.dx for pb in row.pos_bits))
+            dx = row.pos_bits[-1].bbox.upper_right.x - row.pos_bits[0].bbox.lower_left.x
+            dy = row.pos_bits[-1].bbox.upper_right.y - row.pos_bits[0].bbox.lower_left.y
             assert sum_x == dx and dx == wall.dx()
             assert WHOLE_BRICK.dy == dy
         assert wall.dy() == len(rows) * COURSE_DY
@@ -228,12 +231,6 @@ class Layout:
 
     @classmethod
     def make_stretcher_bond(cls, wall: BoundingBox) -> typing.Self:
-        # XXX: hard code the layout
-        # rows = [
-        # "|".join("W" * 10 + "H"),
-        # "|".join("H" + "W" * 10),
-        # ] * 16
-
         # require that width satisfies HALF + N * (HEAD+WHOLE)
         dx = wall.dx()
         whole_cnt = (dx - HALF_BRICK.dx) // (HEAD_JOINT.dx + WHOLE_BRICK.dx)
@@ -304,15 +301,18 @@ class State:
 
     @classmethod
     def make(cls, layout: Layout, robot: BoundingBox) -> typing.Self:
-        status: list[str] = [INITIAL * len(row.bits) for row in layout.rows]
-        status[0] = FRONTIER * len(layout.rows[0].bits)
+        assert robot.contains(_BBox(ORIGIN, _CC(WHOLE_BRICK.dx, WHOLE_BRICK.dy))), (
+            "robot smaller than brick, probably expressed in mm instead of µm"
+        )
+        status: list[str] = [INITIAL * len(row.pos_bits) for row in layout.rows]
+        status[0] = FRONTIER * len(layout.rows[0].pos_bits)
         return cls(layout=layout, robot=robot, status=status)
 
     def print(self):
         for row_idx in range(len(self.layout.rows) - 1, -1, -1):
             bit_row = self.layout.rows[row_idx]
             bit_strings = []
-            for bp in bit_row.bits:
+            for bp in bit_row.pos_bits:
                 bit_strings.append(
                     format_bit(
                         bp.bit,
@@ -377,7 +377,7 @@ class State:
             (row_idx, row_fs) = pair
             first = row_fs.find(FRONTIER)
             last = row_fs.rfind(FRONTIER)
-            target_x = self.layout.rows[row_idx].bits[first].bbox.lower_left.x
+            target_x = self.layout.rows[row_idx].pos_bits[first].bbox.lower_left.x
             target_dx = self.layout.rows[row_idx].dx(first, last)
             if margin := self.robot.dx() - target_dx:
                 target_x -= (margin // 10) * 10
@@ -386,14 +386,17 @@ class State:
             if stride:
                 return copy.replace(self, robot=self.robot.stride(stride))
 
-        # raise robot
+        # raise robot to next unreachable row
         robot_course_cnt = self.robot.dy() // COURSE_DY
         rise = robot_course_cnt * COURSE_DY
         risen_robot = self.robot.raise_(rise)
         if risen_robot.lower_left.y < self.layout.wall.dy():
             return copy.replace(self, robot=risen_robot)
 
-        # TODO: assert all complete
+        for row_status in self.status:
+            assert row_status.replace(COMPLETE, "") == "", (
+                "steps() halted, but build incomplete"
+            )
 
     def reachable_frontier_head(self) -> PositionedBit | None:
         return next(self.reachable_frontier(), None)
@@ -401,7 +404,7 @@ class State:
     def reachable_frontier(self) -> typing.Generator[PositionedBit]:
         # bottom to top, left to right
         for pb_row, status_row in zip(self.layout.rows, self.status):
-            for pb, status in zip(pb_row.bits, status_row):
+            for pb, status in zip(pb_row.pos_bits, status_row):
                 if status == FRONTIER and self.is_reachable(pb.bbox):
                     yield pb
 
@@ -451,7 +454,7 @@ def _test_rows_from():
     assert layout.rows
     assert len(layout.rows) == 61
     for row in layout.rows:
-        assert len(row.bits) == 11
+        assert len(row.pos_bits) == 11
 
 
 def test_print():
@@ -513,19 +516,19 @@ def test_overlaps_x():
 
     ols = rHWW.overlaps_x(_t_bbox(0, r_dx))
     assert len(ols) == 5
-    assert ols == rHWW.bits
+    assert ols == rHWW.pos_bits
 
     ols = rHWW.overlaps_x(_t_bbox(1, r_dx - 1))
     assert len(ols) == 5
-    assert ols == rHWW.bits
+    assert ols == rHWW.pos_bits
 
     ols = rHWW.overlaps_x(_t_bbox(HALF_BRICK.dx - 1, r_dx - 1))
     assert len(ols) == 5
-    assert ols == rHWW.bits
+    assert ols == rHWW.pos_bits
 
     ols = rHWW.overlaps_x(_t_bbox(HALF_BRICK.dx, r_dx))
     assert len(ols) == 4
-    assert ols == rHWW.bits[1:]
+    assert ols == rHWW.pos_bits[1:]
 
 
 patterns = [
@@ -540,7 +543,7 @@ patterns = [
 
 def pattern_to_layout(pattern: str, row_cnt: int) -> tuple[BoundingBox, list[str]]:
     row = Row.make(0, pattern)
-    dx = row.bits[-1].bbox.upper_right.x - row.bits[0].bbox.lower_left.x
+    dx = row.pos_bits[-1].bbox.upper_right.x - row.pos_bits[0].bbox.lower_left.x
     dy = row_cnt * COURSE_DY
     wall = _BBox(ORIGIN, _CC(dx, dy))
     row_strs = ([pattern, "".join(reversed(pattern))] * (1 + row_cnt // 2))[:row_cnt]
@@ -552,10 +555,9 @@ def main(args):
     robot = ROBOT_813
 
     # NOTE: tweak here for variations
-    # wall, row_strs = pattern_to_layout("H|W|W|W", 4)
-    # layout = Layout.make(wall, row_strs)
-    # TODO: breaks with different robot
-    # robot = _BBox(ORIGIN, _CC(600, 2000))
+    wall, row_strs = pattern_to_layout("H|W|W|W", 40)
+    layout = Layout.make(wall, row_strs)
+    robot = _BBox(ORIGIN, _CC(400_000, 2000_000))
 
     s0 = State.make(layout, robot)
     for step, state in enumerate(s0.steps()):
