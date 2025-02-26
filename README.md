@@ -12,10 +12,14 @@ Need to have python 3.13 - I used 1 feature there but will tweak it later to be 
 
 Using less allows Space/f to go forward 1 step, and b to go backward.
 
+## Summary
 
-## Brief Design Notes
+- Most fun take home I've ever had, certainly only one I made videos to share :)
+- Simplest Approach: Design + Plan/Execute are separate phases. Treat as layout with separate state machine.
+- Optimizing Strides is key, current solution is decent, will add more after first submit.
+- Full support and partial success for Bonus 1, but needs a few tweaks to fully work.
 
-(See also: `notes/*` for my on-the-fly thoughts and notes.)
+## Brief Design Notes - Written BEFORE Coding
 
 ### Outcomes & Rough Approach
 
@@ -51,7 +55,7 @@ Let's display ASCII:
 - yellow for ineligible (unlocked + unreachable by robot)
 
 
-## Disorganized Notes during dev
+## Disorganized Notes - DURING/AFTER Coding
 
 ### Solution Notes
 
