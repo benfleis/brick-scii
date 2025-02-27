@@ -37,6 +37,12 @@ class Position(typing.NamedTuple):
     item: int  # analogue: Coordinate.x
     row: int  # analogue: Coordinate.y
 
+    def offset(self, items: int = 0, rows: int = 0) -> typing.Self:
+        if not items and not rows:
+            return self
+
+        return self.__class__(self.item + items, self.row + rows)
+
 
 class Coordinate(typing.NamedTuple):
     """Coordinate is classic cartesian on 2d space."""
@@ -348,7 +354,8 @@ class State:
             "robot smaller than brick, probably expressed in mm instead of µm"
         )
         status: list[str] = [INITIAL * len(row.pos_items) for row in layout.rows]
-        status[0] = FRONTIER * len(layout.rows[0].pos_items)
+        # set all bottom bricks to frontier
+        status[0] = FRONTIER + (INITIAL + FRONTIER) * (len(status[0]) // 2)
         return cls(layout=layout, robot=robot, status=status)
 
     def print(self):
@@ -398,10 +405,13 @@ class State:
     def is_reachable(self, bbox: BoundingBox) -> bool:
         return self.robot.contains(bbox)
 
-    def step(self) -> typing.Self | None:
+    def step(self) -> tuple[str, typing.Self] | None:
         # lay brick in reachable frontier
         if to_install := self.reachable_frontier_head():
-            return self.install_item(to_install)
+            return (
+                f"install({to_install.item.name}, pos={to_install.pos})",
+                self.install_item(to_install),
+            )
 
         # NOTE: presume costs of brick << stride << raise_
         # frontier plucking is relatively straightforward, greedy lowest is probably enough
@@ -427,14 +437,17 @@ class State:
 
             stride = target_x - self.robot.lower_left.x
             if stride:
-                return copy.replace(self, robot=self.robot.stride(stride))
+                return (
+                    f"stride(dx={stride})",
+                    copy.replace(self, robot=self.robot.stride(stride)),
+                )
 
         # raise robot to next unreachable row
         robot_course_cnt = self.robot.dy() // COURSE_DY
         rise = robot_course_cnt * COURSE_DY
         risen_robot = self.robot.raise_(rise)
         if risen_robot.lower_left.y < self.layout.wall.dy():
-            return copy.replace(self, robot=risen_robot)
+            return (f"raise(dy={rise})", copy.replace(self, robot=risen_robot))
 
         for row_status in self.status:
             assert row_status.replace(COMPLETE, "") == "", (
@@ -454,12 +467,29 @@ class State:
     def install_item(self, pi: PositionedItem) -> typing.Self:
         rv = self.set_complete(pi.pos)
 
+        # check whether neighboring bricks allow mortan joint to join frontier
+        if pi.item != HEAD_JOINT:
+            if pi.pos.item >= 2:
+                # check left of installed
+                lhs_mortar = pi.pos.offset(items=-1)
+                assert not rv.is_complete(lhs_mortar)
+                if rv.is_complete(lhs_mortar.offset(items=-1)):
+                    rv = rv.set_frontier(lhs_mortar)
+
+            if pi.pos.item < len(rv.layout.rows[pi.pos.row].pos_items) - 2:
+                # check right of installed
+                rhs_mortar = pi.pos.offset(items=+1)
+                assert not rv.is_complete(rhs_mortar)
+                if rv.is_complete(rhs_mortar.offset(items=+1)):
+                    rv = rv.set_frontier(rhs_mortar)
+
         if pi.pos.row != len(rv.layout.rows) - 1:
+            # scan row above for newly unlocked frontier elements
             up_row = rv.layout.rows[pi.pos.row + 1]
             new_frontier = [
                 pi
                 for pi in up_row.overlaps_x(pi.bbox.raise_(COURSE_DY))
-                if rv.is_supported(pi)
+                if pi.item != HEAD_JOINT and rv.is_supported(pi)
             ]
             for frontier_pi in new_frontier:
                 rv = rv.set_frontier(frontier_pi.pos)
@@ -485,11 +515,16 @@ class State:
         )
         return support_bbox.contains(pi.bbox)
 
-    def steps(self) -> typing.Generator[typing.Self]:
-        cur = self
+    def steps(self) -> typing.Generator[tuple[str, typing.Self]]:
+        fmtd_wall = f"({self.layout.wall.dx():,} μm, {self.layout.wall.dy():,}) μm"
+        fmtd_robot = f"({self.robot.dx():,} μm, {self.robot.dy():,} μm)"
+        cur = (
+            f"initialize(wall={fmtd_wall}, robot={fmtd_robot}, state=...)",
+            self,
+        )
         while cur:
             yield cur
-            cur = cur.step()
+            cur = cur[1].step()
 
 
 def _test_rows_from():
@@ -620,9 +655,9 @@ def main(args):
     # robot = _BBox(ORIGIN, _CC(400_000, 2000_000))
 
     s0 = State.make(layout, robot)
-    for step, state in enumerate(s0.steps()):
+    for step, (log, state) in enumerate(s0.steps()):
+        print("action =", log)
         print("step =", step)
-        print("robot =", state.robot)
         state.print()
         print()
 
