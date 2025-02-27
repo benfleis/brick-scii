@@ -85,7 +85,3 @@ Let's display ASCII:
 ## Known / Anticipated Warts
 
 - Stride planning is nice but imperfect. Handing in to get the ball rolling but it's the next thing I'll play with. Lowest frontier is a good starting point. My instinct says that greedy selecting the max number of unblocked bricks in 1 position is probably "good enough". I imagine the "upward" pyramid from a brick as projected dependency-set, trimmed by the robot-boundingbox
-
-- I treated head joints as first-class items, but did not prevent them from being installed without neighboring bricks. TODO!
-
-- Raise function broken for non-test walls.
