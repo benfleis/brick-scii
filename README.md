@@ -72,7 +72,7 @@ Let's display ASCII:
 
 - Approach - hackathon + 1st pass refinement.
 
-- I began with a string based rep to keep it simple. I got partial functionality pretty quickly here, but hit-the-wall (pun intended!) at my first attempt to properly calculate "support" dependencies. A simple-overzealous approximation with strings is simply every index is supported by its immediate underneath+2 siblings. This is enough to make progress and build walls. After quickly confirming this, I moved on from the string rep, and used strings as human-friendly layout spec, and internally converted to using `PositionedBits`. (Bit = Item.)
+- I began with a string based rep to keep it simple. I got partial functionality pretty quickly here, but hit-the-wall (pun intended!) at my first attempt to properly calculate "support" dependencies. A simple-overzealous approximation with strings is simply every index is supported by its immediate underneath+2 siblings. This is enough to make progress and build walls. After quickly confirming this, I moved on from the string rep, and used strings as human-friendly layout spec, and internally converted to using `PositionedItem`s.
 
 - This problem wants to be solved in a functional/immutable way, as a series of states and actions, ffwd/rewind etc. As much as reasonable in python I approached this way. But I didn't get to ffwd/rewind. (Not implying that it's required for that functionality, but is a natural approach IMHO.)
 
@@ -86,6 +86,6 @@ Let's display ASCII:
 
 - Stride planning is nice but imperfect. Handing in to get the ball rolling but it's the next thing I'll play with. Lowest frontier is a good starting point. My instinct says that greedy selecting the max number of unblocked bricks in 1 position is probably "good enough". I imagine the "upward" pyramid from a brick as projected dependency-set, trimmed by the robot-boundingbox
 
-- I treated head joints as first-class bits, but did not prevent them from being installed without neighboring bricks. TODO!
+- I treated head joints as first-class items, but did not prevent them from being installed without neighboring bricks. TODO!
 
 - Raise function broken for non-test walls.
