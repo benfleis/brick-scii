@@ -216,6 +216,10 @@ class Row:
             - self.pos_items[first].bbox.lower_left.x
         )
 
+    def pos_item(self, item_idx: int) -> PositionedItem:
+        assert item_idx >= 0 and item_idx < len(self.pos_items)
+        return self.pos_items[item_idx]
+
 
 @dataclass(frozen=True)
 class Layout:
@@ -294,6 +298,13 @@ class Layout:
 
         rows = list(islice(cycle(patterns), row_cnt))
         return cls.make(wall, rows)
+
+    def row(self, row_idx: int) -> Row:
+        assert row_idx >= 0 and row_idx < len(self.rows)
+        return self.rows[row_idx]
+
+    def pos_item(self, pos: Position) -> PositionedItem:
+        return self.row(pos.row).pos_item(pos.item)
 
 
 ITEM_FORMATS_BY_KEY: dict[str, tuple[str, str]] = {
@@ -449,10 +460,12 @@ class State:
         if risen_robot.lower_left.y < self.layout.wall.dy():
             return (f"raise(dy={rise})", copy.replace(self, robot=risen_robot))
 
+        # nothing left to do, (assert completion and) return None
         for row_status in self.status:
             assert row_status.replace(COMPLETE, "") == "", (
                 "steps() halted, but build incomplete"
             )
+        return None
 
     def reachable_frontier_head(self) -> PositionedItem | None:
         return next(self.reachable_frontier(), None)
@@ -656,10 +669,15 @@ def main(args):
 
     s0 = State.make(layout, robot)
     for step, (log, state) in enumerate(s0.steps()):
-        print("action =", log)
-        print("step =", step)
-        state.print()
-        print()
+        if (
+            log.startswith("init")
+            or log.startswith("stride")
+            or log.startswith("raise")
+        ):
+            print("action =", log)
+            print("step =", step)
+            state.print()
+            print()
 
 
 if __name__ == "__main__":
