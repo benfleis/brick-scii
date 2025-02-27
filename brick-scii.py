@@ -176,12 +176,12 @@ class Row:
         x0 = 0
         for item_idx, item_key in enumerate(row_str):
             item = ITEMS_BY_KEY[item_key]
-            pb = PositionedItem(
+            pi = PositionedItem(
                 item=item,
                 pos=_Pos(item=item_idx, row=row_idx),
                 bbox=_BBox(_CC(x0, y0), _CC(x0 + item.dx, y1)),
             )
-            row.append(pb)
+            row.append(pi)
             x0 += item.dx
         return cls(row)
 
@@ -191,7 +191,7 @@ class Row:
     __repr__ = __str__
 
     def format(self, to_lower: bool = False) -> str:
-        out = "".join(map(lambda pb: pb.item.key, self.pos_items))
+        out = "".join(map(lambda pi: pi.item.key, self.pos_items))
         return out if not to_lower else out.lower()
 
     def overlaps_x(self, bbox: BoundingBox) -> list[PositionedItem]:
@@ -201,8 +201,8 @@ class Row:
             _CC(bbox.upper_right.x, self.pos_items[0].bbox.upper_right.y),
         )
         it = iter(self.pos_items)
-        it = dropwhile(lambda pb: not bbox.overlaps(pb.bbox), it)
-        return list(takewhile(lambda pb: bbox.overlaps(pb.bbox), it))
+        it = dropwhile(lambda pi: not bbox.overlaps(pi.bbox), it)
+        return list(takewhile(lambda pi: bbox.overlaps(pi.bbox), it))
 
     def dx(self, first: int = 0, last: int = -1) -> int:
         return (
@@ -231,7 +231,7 @@ class Layout:
 
         # validate some things
         for row in rows:
-            sum_x = sum((pb.item.dx for pb in row.pos_items))
+            sum_x = sum((pi.item.dx for pi in row.pos_items))
             dx = (
                 row.pos_items[-1].bbox.upper_right.x
                 - row.pos_items[0].bbox.lower_left.x
@@ -446,32 +446,32 @@ class State:
 
     def reachable_frontier(self) -> typing.Generator[PositionedItem]:
         # bottom to top, left to right
-        for pb_row, status_row in zip(self.layout.rows, self.status):
-            for pb, status in zip(pb_row.pos_items, status_row):
-                if status == FRONTIER and self.is_reachable(pb.bbox):
-                    yield pb
+        for pi_row, status_row in zip(self.layout.rows, self.status):
+            for pi, status in zip(pi_row.pos_items, status_row):
+                if status == FRONTIER and self.is_reachable(pi.bbox):
+                    yield pi
 
-    def install_item(self, pb: PositionedItem) -> typing.Self:
-        rv = self.set_complete(pb.pos)
+    def install_item(self, pi: PositionedItem) -> typing.Self:
+        rv = self.set_complete(pi.pos)
 
-        if pb.pos.row != len(rv.layout.rows) - 1:
-            up_row = rv.layout.rows[pb.pos.row + 1]
+        if pi.pos.row != len(rv.layout.rows) - 1:
+            up_row = rv.layout.rows[pi.pos.row + 1]
             new_frontier = [
-                pb
-                for pb in up_row.overlaps_x(pb.bbox.raise_(COURSE_DY))
-                if rv.is_supported(pb)
+                pi
+                for pi in up_row.overlaps_x(pi.bbox.raise_(COURSE_DY))
+                if rv.is_supported(pi)
             ]
-            for frontier_pb in new_frontier:
-                rv = rv.set_frontier(frontier_pb.pos)
+            for frontier_pi in new_frontier:
+                rv = rv.set_frontier(frontier_pi.pos)
 
         return rv
 
-    def is_supported(self, pb: PositionedItem) -> bool:
-        if pb.pos.row == 0:
+    def is_supported(self, pi: PositionedItem) -> bool:
+        if pi.pos.row == 0:
             return True
-        support_row = self.layout.rows[pb.pos.row - 1]
+        support_row = self.layout.rows[pi.pos.row - 1]
         support_overlaps = [
-            pb for pb in support_row.overlaps_x(pb.bbox) if self.is_complete(pb.pos)
+            pi for pi in support_row.overlaps_x(pi.bbox) if self.is_complete(pi.pos)
         ]
         if not support_overlaps:
             return False
@@ -480,10 +480,10 @@ class State:
         lhs_x = support_overlaps[0].bbox.lower_left.x
         rhs_x = support_overlaps[-1].bbox.upper_right.x
         support_bbox = _BBox(
-            _CC(lhs_x, pb.bbox.lower_left.y),
-            _CC(rhs_x, pb.bbox.upper_right.y),
+            _CC(lhs_x, pi.bbox.lower_left.y),
+            _CC(rhs_x, pi.bbox.upper_right.y),
         )
-        return support_bbox.contains(pb.bbox)
+        return support_bbox.contains(pi.bbox)
 
     def steps(self) -> typing.Generator[typing.Self]:
         cur = self
